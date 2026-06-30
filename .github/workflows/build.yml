@@ -1,0 +1,35 @@
+name: Spring Boot Build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Verify Maven
+        run: mvn -version
+
+      - name: Clean
+        run: mvn clean
+
+      - name: Compile
+        run: mvn compile
+
+      - name: Test
+        run: mvn test
+
+      - name: Package
+        run: mvn package
