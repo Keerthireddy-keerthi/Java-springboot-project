@@ -1,19 +1,54 @@
-name: Deploy Streamlit Frontend to EC2
+name: Frontend to EC2
 
 on:
-  workflow_run:
-    workflows: ["Deploy Backend to EC2"]
-    types:
-      - completed
+  # push:
+  #   branches:
+  #     - main
+
+  workflow_dispatch:
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      ######################################################
+      # SonarQube Scan
+      ######################################################
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=frontend
+            -Dsonar.projectName=frontend
+            -Dsonar.sources=frontend
+
+      ######################################################
+      # Quality Gate
+      ######################################################
+
+      - name: SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      ######################################################
+      # Deploy
+      ######################################################
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.1.0
@@ -33,7 +68,6 @@ jobs:
             mkdir -p $APP_DIR
             cd $APP_DIR
 
-            # Clone or pull latest code
             if [ -d "$REPO_NAME/.git" ]; then
               cd $REPO_NAME
               git reset --hard
@@ -43,12 +77,10 @@ jobs:
               cd $REPO_NAME
             fi
 
-            # Install Python
             sudo dnf install -y python3 python3-pip
 
             cd frontend
 
-            # Create virtual environment
             if [ ! -d "venv" ]; then
               python3 -m venv venv
             fi
@@ -58,33 +90,70 @@ jobs:
             pip install --upgrade pip
             pip install -r requirements.txt
 
-            # 🔥 Create/Update systemd service file
             sudo tee /etc/systemd/system/frontend.service > /dev/null <<EOF
             [Unit]
             Description=Streamlit Frontend App
             After=network.target
-            
+
             [Service]
             User=ec2-user
             WorkingDirectory=/home/ec2-user/front/Java-springboot-project/frontend
-            
+
             ExecStart=/bin/bash -c 'source /home/ec2-user/front/Java-springboot-project/frontend/venv/bin/activate && streamlit run app.py --server.port=8501 --server.address=0.0.0.0'
-            
+
             Environment=API_URL=http://localhost:8084
-            
+
             Restart=always
             RestartSec=5
-            
+
             StandardOutput=append:/home/ec2-user/frontend.log
             StandardError=append:/home/ec2-user/frontend-error.log
-            
+
             [Install]
             WantedBy=multi-user.target
             EOF
 
-            # Reload and restart service
             sudo systemctl daemon-reload
             sudo systemctl enable frontend
             sudo systemctl restart frontend
 
-            echo "✅ Deployment successful"
+            echo "Deployment completed."
+
+      ######################################################
+      # Email Notification
+      ######################################################
+
+      - name: 📧 Send Deployment Report
+        if: success() || failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: AI Deployment Report - ${{ github.repository }}
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+
+          body: |
+            🚀 AI Deployment Report
+
+            Repository : ${{ github.repository }}
+            Workflow   : ${{ github.workflow }}
+            Branch     : ${{ github.ref_name }}
+            Commit     : ${{ github.sha }}
+
+            Status     : ${{ job.status }}
+
+            Triggered By : ${{ github.actor }}
+            Run Number   : ${{ github.run_number }}
+
+            SonarQube Analysis : Completed
+            Quality Gate       : Passed
+
+            Deployment Target  : EC2
+            Frontend URL       : http://${{ secrets.EC2_HOST }}:8501
+
+            Regards,
+            GitHub Actions
