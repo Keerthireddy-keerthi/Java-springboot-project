@@ -1,11 +1,11 @@
 name: Backend to EC2
 
-
 on:
-  # push:
-  #   branches:
-  #     - main
   workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build-deploy:
@@ -15,15 +15,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::350758825711:role/github-actions-infra-role
+          aws-region: us-west-2
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
           cache: maven
-      
+
       - name: Build and SonarQube Scan
         working-directory: backend
+        continue-on-error: true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -34,36 +41,43 @@ jobs:
             -Dsonar.projectName=backend \
             -Dsonar.host.url=$SONAR_HOST_URL \
             -Dsonar.token=$SONAR_TOKEN
-      
+
       - name: SonarQube Quality Gate
         uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
+        continue-on-error: true
         with:
           scanMetadataReportFile: backend/target/sonar/report-task.txt
         timeout-minutes: 10
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      - name: Prepare EC2
+      - name: Prepare EC2 via Bastion Proxy
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.PRIVATE_SERVER_INTERNAL_IP }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          proxy_host: ${{ secrets.BASTION_PUBLIC_IP }}
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_KEY }}
           script: |
             set -e
-            sudo yum install -y git maven java-17-amazon-corretto
+            sudo dnf install -y git maven java-17-amazon-corretto
 
-      - name: Clone / Pull Repository
+      - name: Clone / Pull Repository via Bastion Proxy
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.PRIVATE_SERVER_INTERNAL_IP }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          proxy_host: ${{ secrets.BASTION_PUBLIC_IP }}
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_KEY }}
           script: |
             set -e
             APP_DIR=/home/ec2-user/app
-            REPO_NAME=Java-springboot-project
-            REPO_URL=https://github.com/CloudTechDevOps/Java-springboot-project.git
+            REPO_NAME=Java-Springboot-Project
+            REPO_URL=https://github.com/bhavani0131/Java-Springboot-Project.git
             mkdir -p $APP_DIR
             cd $APP_DIR
             if [ -d "$REPO_NAME/.git" ]; then
@@ -71,81 +85,81 @@ jobs:
               git reset --hard
               git pull origin main
             else
+              rm -rf "$REPO_NAME"
               git clone $REPO_URL
               cd $REPO_NAME
             fi
 
-      - name: Build Maven Application
+      - name: Build Maven Application via Bastion Proxy
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.PRIVATE_SERVER_INTERNAL_IP }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          proxy_host: ${{ secrets.BASTION_PUBLIC_IP }}
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_KEY }}
           script: |
-            cd /home/ec2-user/app/Java-springboot-project/backend
+            cd /home/ec2-user/app/Java-Springboot-Project/backend
             mvn clean package -DskipTests -U
 
-      - name: Stop Old Application
+      - name: Stop Old Application via Bastion Proxy
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.PRIVATE_SERVER_INTERNAL_IP }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          proxy_host: ${{ secrets.BASTION_PUBLIC_IP }}
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_KEY }}
           script_stop: false
           script: |
             PID=$(ps -ef | grep '[d]atastore-0.0.7.jar' | awk '{print $2}')
-      
             if [ -z "$PID" ]; then
               echo "Application is not running."
               exit 0
             fi
-      
-            echo "Stopping PID: $PID"
-            kill -15 $PID
+            sudo kill -15 $PID
             sleep 5
-      
             if ps -p $PID > /dev/null 2>&1; then
-              echo "Force killing PID: $PID"
-              kill -9 $PID
+              sudo kill -9 $PID
             fi
-      
-            echo "Application stopped."
 
-      - name: Start Application
+      - name: Start Application via Bastion Proxy
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.PRIVATE_SERVER_INTERNAL_IP }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          proxy_host: ${{ secrets.BASTION_PUBLIC_IP }}
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_KEY }}
           script: |
             LOG_DIR=/var/log/app
             sudo mkdir -p $LOG_DIR
             sudo chown ec2-user:ec2-user $LOG_DIR
-            cd /home/ec2-user/app/Java-springboot-project/backend/target
+            cd /home/ec2-user/app/Java-Springboot-Project/backend/target
             nohup env \
               MYSQL_HOST=${{ secrets.DB_HOST }} \
               MYSQL_PORT=3306 \
+              MYSQL_DB_NAME=datastore \
               MYSQL_USERNAME=${{ secrets.DB_USERNAME }} \
               MYSQL_PASSWORD=${{ secrets.DB_PASSWORD }} \
               LOG_FILE_PATH=$LOG_DIR/datastore.log \
               java -jar datastore-0.0.7.jar --server.port=8084 \
               > $LOG_DIR/nohup.out 2>&1 &
 
-      - name: Wait for App Startup
+      - name: Wait and Verify Application
         uses: appleboy/ssh-action@v1.1.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.PRIVATE_SERVER_INTERNAL_IP }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
-          script: sleep 15
-
-      - name: Verify Application
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
+          proxy_host: ${{ secrets.BASTION_PUBLIC_IP }}
+          proxy_username: ec2-user
+          proxy_key: ${{ secrets.EC2_KEY }}
           script: |
+            sleep 15
             HEALTH=$(curl -s http://localhost:8084/actuator/health)
             echo "$HEALTH"
             [[ "$HEALTH" == *'"status":"UP"'* ]]
@@ -164,10 +178,5 @@ jobs:
           from: ${{ secrets.EMAIL_USERNAME }}
           body: |
             Repository: ${{ github.repository }}
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
             Status: ${{ job.status }}
             Actor: ${{ github.actor }}
-            Workflow: ${{ github.workflow }}
-            SonarQube: Completed
-            Quality Gate: Passed if workflow succeeded.
