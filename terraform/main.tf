@@ -337,7 +337,7 @@ resource "aws_instance" "app_server_v2" {
 
     cd /home/ec2-user
     rm -rf Java-Springboot-Project
-    git clone https://github.com/bhavani0131/Java-Springboot-Project.git
+    git clone https://github.com/Keerthireddy-keerthi/Java-springboot-project.git
 
     cd Java-Springboot-Project/backend
 
@@ -380,7 +380,7 @@ resource "aws_db_instance" "mysql_db" {
   engine                 = "mysql"
   engine_version         = "8.0"
   instance_class         = "db.t3.micro"
-  db_name                = "datastore"
+  db_name                = "keerthiii"
   username               = "admin"
   password               = "Cloud123"
   db_subnet_group_name   = aws_db_subnet_group.db_subnets.name
