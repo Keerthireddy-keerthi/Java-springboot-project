@@ -1,0 +1,61 @@
+name: "1. Infrastructure Deployment via Terraform"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: "Build AWS Infrastructure"
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: "us-west-2"
+      GH_TOKEN: ${{ secrets.REPO_AUTOMATION_TOKEN }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::350758825711:role/github-actions-infra-role
+          aws-region: us-west-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
+
+      - name: Terraform Plan
+        run: terraform plan
+        working-directory: ./terraform
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        working-directory: ./terraform
+
+      - name: Overwrite Dynamic Secrets Automatically
+        working-directory: ./terraform
+        run: |
+          echo "Gathering resource endpoints from AWS..."
+          BASTION_IP=$(terraform output -raw bastion_public_ip)
+          PRIVATE_IP=$(terraform output -raw private_server_internal_ip)
+          FRONTEND_IP=$(terraform output -raw frontend_server_internal_ip)
+          DB_ENDPOINT=$(terraform output -raw rds_endpoint)
+
+          echo "Updating dynamic networking slots via GitHub CLI..."
+          gh secret set BASTION_PUBLIC_IP --repo ${{ github.repository }} --body "$BASTION_IP"
+          gh secret set PRIVATE_SERVER_INTERNAL_IP --repo ${{ github.repository }} --body "$PRIVATE_IP"
+          gh secret set FRONTEND_SERVER_INTERNAL_IP --repo ${{ github.repository }} --body "$FRONTEND_IP"
+          gh secret set DB_HOST --repo ${{ github.repository }} --body "$DB_ENDPOINT"
+
+          echo "✅ Dynamic secrets successfully updated!"
