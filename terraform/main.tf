@@ -8,7 +8,7 @@ terraform {
 
   # 🔒 PRODUCTION REMOTE STATE BACKEND
   backend "s3" {
-    bucket         = "bhavani-tf-state"
+    bucket         = "keerthireddykheer707"
     key            = "prod/state/terraform.tfstate"
     region         = "us-west-2"
     dynamodb_table = "terraform-lock-table"
