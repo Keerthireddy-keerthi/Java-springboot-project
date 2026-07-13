@@ -13,7 +13,7 @@ After=network.target
 User=root
 WorkingDirectory=/root 
 ExecStart=/root/venv/bin/streamlit run app.py --server.port=8501 --server.address=0.0.0.0
-Environment=API_URL=http://172.31.25.254:8084
+Environment=API_URL=http://32.198.105.74:8085
 Restart=always
 RestartSec=5
 
